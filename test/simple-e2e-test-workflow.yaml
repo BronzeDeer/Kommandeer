@@ -1,0 +1,214 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: e2e-kommandeer-
+  labels:
+    workflows.argoproj.io/containerRuntimeExecutor: k8s-api
+spec:
+  serviceaccountname: workflow-admin
+  imagePullSecrets:
+    - name: regcred
+  entrypoint: main
+  templates:
+  - name: main
+    steps:
+      - - name: create-released
+          template: create-released
+      - - name: label-volume
+          template: label-volume
+          arguments:
+            parameters:
+              - name: volume-name
+                value: "{{steps.create-released.outputs.parameters.volume-name}}"
+              - name: group-name
+                value: test-a
+      - - name: kommandeer
+          template: kommandeer
+          arguments:
+            parameters:
+              - name: group-name
+                value: test-a
+      # Also allows us to parse manifest on return and apply jq
+      # (Would be easier with workflows 3.1)
+      - - name: verify-pvc-created
+          template: get-resource
+          arguments:
+            parameters:
+              - name: manifest
+                value: "{{steps.kommandeer.outputs.result}}"
+      # Make sure that the new pvc will be garbage collected with the workflow
+      - - name: claim-pvc
+          template: claim-resource
+          arguments:
+            parameters:
+              - name: name
+                value: "{{steps.verify-pvc-created.outputs.parameters.claim-name}}"
+              - name: namespace
+                value: "{{steps.verify-pvc-created.outputs.parameters.claim-namespace}}"
+
+  - name: create-retained
+    steps:
+      - - name: create
+          template: dynamic-provision-volume
+          arguments:
+            parameters:
+              - name: pvc-name
+                value: test-pvc-a1
+      - - name: patch-retain
+          template: retain-volume
+          arguments:
+            parameters:
+              - name: volume-name
+                value: "{{steps.create.outputs.parameters.volume-name}}"
+    outputs:
+      parameters:
+        - name: volume-name
+          valueFrom:
+            parameter: "{{steps.create.outputs.parameters.volume-name}}"
+        - name: claim-name
+          valueFrom:
+            parameter: "{{steps.create.outputs.parameters.claim-name}}"
+  - name: create-released
+    steps:
+      - - name: create-retained
+          template: create-retained
+      - - name: delete-claim
+          template: delete-claim
+          arguments:
+            parameters:
+              - name: claim-name
+                value: "{{steps.create-retained.outputs.parameters.claim-name}}"
+    outputs:
+      parameters:
+        - name: volume-name
+          valueFrom:
+            parameter: "{{steps.create-retained.outputs.parameters.volume-name}}"
+
+  - name: dynamic-provision-volume
+    inputs:
+      parameters:
+        - name: pvc-name
+          value: test-pvc
+        - name: namespace
+          value: pvc-test
+        - name: selector
+          value: {}
+    activeDeadlineSeconds: 180
+    resource:
+      action: create
+      successCondition:  status.phase = Bound
+      setOwnerReference: true
+      manifest: |
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        metadata:
+          generateName: {{inputs.parameters.pvc-name}}-
+          namespace: {{inputs.parameters.namespace}}
+        spec:
+          resources:
+            requests:
+              storage: "1Gi"
+          volumeMode: Filesystem
+          accessModes:
+            - ReadWriteOnce
+          selector: {{inputs.parameters.selector}}
+    outputs:
+      parameters:
+        - name: volume-name
+          valueFrom:
+            jsonPath: '{.spec.volumeName}'
+        - name: claim-name
+          valueFrom:
+            jsonPath: '{.metadata.name}'
+        - name: volume-obj
+          valueFrom:
+            jqFilter: '.'
+  - name: retain-volume
+    inputs:
+      parameters:
+        - name: volume-name
+    resource:
+      action: patch
+      manifest: |
+        apiVersion: v1
+        kind: PersistentVolume
+        spec:
+          persistentVolumeReclaimPolicy: Retain
+      #Ensure the object is still cleaned up after the workflow is deleted
+      setOwnerReference: true
+      flags:
+        - pv
+        - '{{inputs.parameters.volume-name}}'
+
+  - name: delete-claim
+    inputs:
+      parameters:
+        - name: claim-name
+    resource:
+      action: delete
+      manifest: |
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        metadata:
+          name: "{{inputs.parameters.claim-name}}"
+
+  - name: label-volume
+    inputs:
+      parameters:
+        - name: volume-name
+        - name: group-name
+    resource:
+      action: patch
+      manifest: |
+        metadata:
+          labels:
+            kommandeer/group: {{inputs.parameters.group-name}}
+      flags:
+        - pv
+        - "{{inputs.parameters.volume-name}}"
+
+  - name: kommandeer
+    inputs:
+      parameters:
+        - name: group-name
+        - name: namespace
+          value: pvc-test
+    container:
+      image: bronzedeer/kommandeer:v0.1
+      args:
+        - "{{inputs.parameters.group-name}}"
+        - "{{inputs.parameters.namespace}}"
+
+  - name: get-resource
+    inputs:
+      parameters:
+        - name: manifest
+    resource:
+      action: get
+      manifest: "{{inputs.parameters.manifest}}"
+    outputs:
+      parameters:
+        - name: claim-namespace
+          valueFrom:
+            jsonPath: '{.metadata.namespace}'
+        - name: claim-name
+          valueFrom:
+            jsonPath: '{.metadata.name}'
+        - name: claim-obj
+          valueFrom:
+            jqFilter: '.'
+
+  - name: claim-resource
+    inputs:
+      parameters:
+        - name: name
+        - name: namespace
+    resource:
+      action: patch
+      setOwnerReference: true
+      manifest: ""
+      flags:
+        - "-n"
+        - "{{inputs.parameters.namespace}}"
+        - "pvc"
+        - "{{inputs.parameters.name}}"
