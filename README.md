@@ -1,2 +1,8 @@
 # Kommandeer
-Small container that will select and recycle a released PersistentVolume in K8s. Especially useful for shared Cache disks in CI
+Kommandeer allows you to "commandeer" any released volume from a group of PersistentVolumes with ReclaimStrategy set to "retain". This is especially helpful in CI workflows where certain steps benefit from retaining cache information (e.g. maven local dependency cache) between pipeline invocations.
+
+Kubernetes' default behaviour for retained volumes is aimed at disaster recovery after an accidental eletion of a persistent volume claim for something like a database. Any retained volumes also retain a reference to the previous claim, preventing accidental automatic binding to any random new claim, remaining in the "Released" state indefinitely. At this point an administrator can make the volume eligible for binding again by deleting the claimRef field.
+
+Kommandeer automates this reclaimation process and extends it to whole groups of volumes, claiming any free volume from the pool of released volumes. To minimize the chance of binding to an unintended volume    waiting for manual restoration, only volumes with the "kommandeer/group" label are able to be reclaimed. In order to avoid spurious binding, a name selector on the claim is used and the volume's claimRef is directly patched instead of deleted, bypassing the "Available" stage
+
+Note: You still need to externally synchronize on the kommandeer group! If two kommandeer containers target the same group there is a small chance the slightly later Komandeer will steal the claim from the earlier, especially if only one eligble container exists. A locking mechanism might be introduced in the future to handle this automatically
