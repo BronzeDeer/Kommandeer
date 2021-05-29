@@ -3,7 +3,8 @@
 unset NAMESPACE
 
 usage(){
-  echo "Usage $0 [-n <namespace> ] <group-name>"
+  echo "Usage $0 <options> <group-name>"
+  echo " -n, --namespace namespace to create the claim in"
 }
 
 #Error if we try to set the same variable twice
@@ -20,13 +21,30 @@ set_once(){
 
 }
 
-while getopts 'n:h' arg; do
-case $arg in
-  n) set_once NAMESPACE "$OPTARG" ;;
-  h) usage; exit 1 ;;
-  \?) echo "Unrecognized option '$OPTARG'"; usage; exit 1 ;;
+#Getopt allows us to also handle long args
+options=$(getopt -o 'n:h' -l namespace: -- "$@")
+if [ $? -ne 0 ]; then
+  usage
+  exit 1
+fi
+
+eval set -- "$options"
+while true; do
+case $1 in
+  -n|--namespace)
+    shift
+    set_once NAMESPACE "$1"
+    ;;
+  -h) usage; exit 1 ;;
+  --)
+    shift
+    break
+        ;;
 esac
+shift
 done
+
+#Positional Arguments
 
 if [ -z "$1" ]; then
   usage
