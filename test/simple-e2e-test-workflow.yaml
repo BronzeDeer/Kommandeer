@@ -9,6 +9,11 @@ spec:
   imagePullSecrets:
     - name: regcred
   entrypoint: main
+  arguments:
+    parameters:
+    - name: image-tag
+    - name: image-name
+      value: bronzedeer/kommandeer
   templates:
   - name: main
     steps:
@@ -174,7 +179,8 @@ spec:
         - name: namespace
           value: pvc-test
     container:
-      image: bronzedeer/kommandeer:v0.1
+      image: "{{workflow.parameters.image-name}}:{{workflow.parameters.image-tag}}"
+      imagePullPolicy: "Always"
       args:
         - "{{inputs.parameters.group-name}}"
         - "{{inputs.parameters.namespace}}"
