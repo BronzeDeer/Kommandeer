@@ -182,8 +182,9 @@ spec:
       image: "{{workflow.parameters.image-name}}:{{workflow.parameters.image-tag}}"
       imagePullPolicy: "Always"
       args:
-        - "{{inputs.parameters.group-name}}"
+        - "-n"
         - "{{inputs.parameters.namespace}}"
+        - "{{inputs.parameters.group-name}}"
 
   - name: get-resource
     inputs:
