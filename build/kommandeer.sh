@@ -14,6 +14,8 @@ usage(){
   echo "    Template string to be used as basis for dynamic provisioning. Needs to specify at least apiVersion, kind and resource requirements. Name, if present will be removed in favor of a generated name based on the group name. Namespace will be removed if present. use -n,--namespace instead."
   echo " --claim-template-file"
   echo "    Read claim template from file instead"
+  echo " --claim-limit=<n>"
+  echo "    Sets an upper limit on dynamic provisioning. Pool will not be grown beyond <n> volumes even if all are currently bound"
 }
 
 #Error if we try to set the same variable twice
@@ -31,7 +33,7 @@ set_once(){
 }
 
 #Getopt allows us to also handle long args
-options=$(getopt -o 'n:h' -l namespace: -l claim-template: -l claim-template-file: -- "$@")
+options=$(getopt -o 'n:h' -l namespace: -l claim-template: -l claim-template-file: -l claim-limit: -- "$@")
 if [ $? -ne 0 ]; then
   usage
   exit 1
@@ -52,6 +54,10 @@ case $1 in
   --claim-template)
     shift
     set_once CLAIM_TEMPLATE "$1"
+    ;;
+  --claim-limit)
+    shift
+    set_once CLAIM_LIMIT "$1"
     ;;
   --)
     shift
@@ -83,6 +89,11 @@ if [ -z "${FIRST_RELEASED_PV:+x}" ]; then
   if [ -z "${CLAIM_TEMPLATE:+x}" ]; then
     echo "ERROR: 0/${TOTAL_IN_GROUP} volumes in group '$GROUP' currently in released state"
     exit 1
+  fi
+
+  if [ $TOTAL_IN_GROUP -ge ${CLAIM_LIMIT:-$((TOTAL_IN_GROUP+1))} ]; then
+    echo "ERROR: No released volumes in group '$GROUP'. Dynamic Provisioning enabled, but group is over limit: ${TOTAL_IN_GROUP}/${CLAIM_LIMIT}"
+    exit 2;
   fi
 
   YQ_COMMAND="del(.metadata.name) | del(.metadata.namespace)| .metadata.generateName=\"kommandeer-${GROUP}-\""

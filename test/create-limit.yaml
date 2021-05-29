@@ -1,0 +1,116 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: kommandeer-create-from-template-
+  labels:
+    workflows.argoproj.io/containerRuntimeExecutor: k8s-api
+spec:
+  serviceaccountname: workflow-admin
+  imagePullSecrets:
+    - name: regcred
+  entrypoint: main
+  arguments:
+    parameters:
+    - name: image-tag
+    - name: image-name
+      value: bronzedeer/kommandeer
+  templates:
+  - name: main
+    steps:
+      - - name: should-work
+          template: dynamic-provision
+      - - name: should-fail
+          template: dynamic-provision
+  - name: dynamic-provision
+    steps:
+      - - name: provision-volume
+          template: kommandeer
+          arguments:
+            parameters:
+              - name: group-name
+                value: "{{workflow.name}}"
+              - name: claim-limit
+                value: "1"
+              - name: claim-template
+                value: |
+                  apiVersion: v1
+                  kind: PersistentVolumeClaim
+                  spec:
+                    resources:
+                      requests:
+                        storage: "1Gi"
+                    accessModes:
+                      - ReadWriteOnce
+      # Also allows us to parse manifest on return and apply jq
+      # (Would be easier with workflows 3.1)
+      - - name: verify-pvc-bound
+          template: verify-bound
+          arguments:
+            parameters:
+              - name: manifest
+                value: "{{steps.provision-volume.outputs.result}}"
+      # Make sure that the new pvc will be garbage collected with the workflow
+      - - name: claim-pvc
+          template: claim-resource
+          arguments:
+            parameters:
+              - name: name
+                value: "{{steps.verify-pvc-bound.outputs.parameters.claim-name}}"
+              - name: namespace
+                value: "{{steps.verify-pvc-bound.outputs.parameters.claim-namespace}}"
+
+  - name: kommandeer
+    inputs:
+      parameters:
+        - name: group-name
+        - name: claim-template
+        - name: claim-limit
+        - name: namespace
+          value: pvc-test
+    container:
+      image: "{{workflow.parameters.image-name}}:{{workflow.parameters.image-tag}}"
+      imagePullPolicy: "Always"
+      args:
+        - "-n"
+        - "{{inputs.parameters.namespace}}"
+        - "--claim-template"
+        - "{{inputs.parameters.claim-template}}"
+        - "--claim-limit"
+        - "{{inputs.parameters.claim-limit}}"
+        - "{{inputs.parameters.group-name}}"
+
+  - name: verify-bound
+    inputs:
+      parameters:
+        - name: manifest
+    activeDeadlineSeconds: 180
+    resource:
+      action: get
+      successCondition: status.phase = Bound
+      manifest: "{{inputs.parameters.manifest}}"
+    outputs:
+      parameters:
+        - name: claim-namespace
+          valueFrom:
+            jsonPath: '{.metadata.namespace}'
+        - name: claim-name
+          valueFrom:
+            jsonPath: '{.metadata.name}'
+        - name: claim-obj
+          valueFrom:
+            jqFilter: '.'
+
+  - name: claim-resource
+    inputs:
+      parameters:
+        - name: name
+        - name: namespace
+    resource:
+      action: patch
+      setOwnerReference: true
+      manifest: ""
+      flags:
+        - "-n"
+        - "{{inputs.parameters.namespace}}"
+        - "pvc"
+        - "{{inputs.parameters.name}}"
